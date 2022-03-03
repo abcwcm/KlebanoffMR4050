@@ -1,0 +1,156 @@
+---
+title: "2. Identifying the most reactive clonotype from donor MR4050"
+author: "Friederike Dündar"
+date: "July 2021; updated `r Sys.Date()`"
+output:
+  rmarkdown::html_vignette:
+    toc: true
+vignette: >
+  %\VignetteIndexEntry{2. Identifying most reactive clonotype from donor MR4050}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval=TRUE, cache=TRUE
+)
+```
+```{r libraries, message=FALSE, warning=FALSE, cache=FALSE}
+library(data.table)
+library(magrittr)
+library(SingleCellExperiment)  
+library(ggplot2); theme_set(theme_bw(base_size = 16) )
+library(ggrepel)
+library(patchwork)
+
+#library(KlebanoffVDJData2020)
+```
+
+
+```{r cache=FALSE}
+##sce.filt <- readRDS(file = paste0( "/Users/frd2007/Documents/Projects/2018-10_Smita/data/sce_", samplename, "_clonotypefiltered.rds"))
+devtools::load_all()
+sce.filt <- load_MR4050filt()
+samplename <- "MR4050"
+ifng_threshold <- 4
+```
+
+
+# Identifying *IFNg* threshold
+
+```{r }
+markers <- c("IFNG", "TNF", "IL2", "TNFRSF4", "TNFRSF9") 
+mks.dt <- scABC2::make_long_dt(sce.filt, exprs_values = "logcounts",
+  features = markers, include_metaData=c("cluster", "Sample",
+    "cdr3s_aa","freq_per_Sample", "numTRA","numTRB"))
+mks.dt$gene_name <- factor(mks.dt$feature_name, levels = markers, ordered = TRUE)
+mks.dt <- mks.dt[logcounts > 0]
+```
+
+```{r activation_marker_expression, fig.width = 12, fig.height = 9}
+ggplot(mks.dt, 
+  aes(x = cluster, y = logcounts, color = freq_per_Sample)) +  
+  geom_violin() +
+  ggbeeswarm::geom_quasirandom(size =1) +
+  facet_wrap(~gene_name) +
+  facet_grid(Sample~gene_name) +
+  theme(legend.position = "bottom") +
+  scale_color_viridis_c()
+```
+
+```{r ifng_threshold, fig.width = 5, fig.height = 6}
+ggplot(mks.dt[gene_name == "IFNG"], 
+  aes(x = cluster, y = logcounts, color = freq_per_Sample)) +  
+  geom_violin() +
+  ggbeeswarm::geom_quasirandom(size =1) +
+  facet_wrap(~gene_name) +
+  geom_hline(yintercept=ifng_threshold, linetype = "dashed") +
+  facet_grid(Sample~gene_name) +
+  theme(legend.position = "bottom") +
+  scale_color_viridis_c()
+```
+
+4 is a justifyable cut-off for IFNg expression since we're expecting a polyclonal response and I want to be a bit more lenient in the beginning.
+
+# Identifying the most reactive clonotype
+
+To select the best candidate, we're going to **compare the median expression of IFNg** between MUT and WT samples.
+
+Extracting clonotypes of cells with IFNg above 4:
+
+```{r}
+cdr3s_aa_list <- unique(subset(mks.dt, gene_name == "IFNG" & logcounts > ifng_threshold)$cdr3s_aa)
+```
+
+Assess the number of cells with the respective clonotypes:
+
+```{r clonotype_frequencies, fig.width = 12, fig.height = 9}
+mks.dt[ cdr3s_aa %in% cdr3s_aa_list, .N, by = c("Sample","cdr3s_aa")] %>%
+  ggplot(., aes(x = cdr3s_aa, y = N, fill = Sample)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  coord_flip() +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c("lightskyblue1", "limegreen")) +
+  ggtitle(paste("Frequencies of CDRs of cells with IFNg >", ifng_threshold),
+      subtitle = samplename) +
+  ylab("# cells") +
+  geom_hline(yintercept = 20, linetype = "dashed")
+```
+ x
+I don't think we need to focus on the most abundant ones here.
+Smita also expects there to be a polyclonal response. 
+
+```{r}
+freq_cells <- mks.dt[ cdr3s_aa %in% cdr3s_aa_list, .N, 
+    by = c("Sample","cdr3s_aa")] %>%
+    #.[N>=20] %>%
+    .$cdr3s_aa %>% unique
+```
+
+
+```{r}
+strsplit(freq_cells, ";") %>% unlist %>% grep("TRA", value=TRUE, .) %>% table %>% as.data.frame
+```
+
+```{r}
+strsplit(freq_cells, ";") %>% unlist %>% grep("TRB", value=TRUE, .) %>% table %>% as.data.frame
+```
+
+```{r}
+med_ifng <- mks.dt[gene_name == "IFNG" & cdr3s_aa %in% freq_cells,
+                   median(logcounts, na.rm = TRUE),
+                   by = c("Sample","cdr3s_aa")] %>%
+  dcast(.,  cdr3s_aa~Sample, value.var = "V1") 
+med_ifng[is.na(MUT.MR4050), MUT.MR4050 := 0]
+med_ifng[is.na(WT.MR4050), WT.MR4050 := 0]
+med_ifng[, delta_MUT_WT := MUT.MR4050-WT.MR4050]
+setorder(med_ifng, -delta_MUT_WT)
+```
+
+```{r table1, results='asis', cache=FALSE}
+knitr::kable(as.data.frame(med_ifng))
+```
+
+```{r activation_markers_in_Ifng_high_cells, fig.height = 8, fig.width = 65, warning = FALSE}
+ggplot(mks.dt[cdr3s_aa %in% freq_cells ], 
+  aes(x = Sample, y = logcounts)) +  
+  geom_violin(aes(color = Sample)) +
+  ggbeeswarm::geom_quasirandom(size =2.5, groupOnX = TRUE, shape = 21, aes(fill = freq_per_Sample)) +
+  xlab("") + coord_flip() +
+  facet_grid(gene_name~factor(cdr3s_aa, levels = med_ifng$cdr3s_aa, ordered = TRUE)) +
+  theme(legend.position = "bottom") +
+  scale_fill_viridis_c() +
+  scale_color_manual(values = c("lightskyblue1","limegreen"))
+```
+
+------------
+
+```{r}
+sessionInfo()
+```
+

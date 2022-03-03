@@ -1,0 +1,6 @@
+rowData	https://wcm.box.com/shared/static/a2p8jksx6ym2g65una4btyi2xcsak854.rds	MR4050
+colData	https://wcm.box.com/shared/static/eij5vcz90d7gxy19jx13ft34a3k1szxa.rds	MR4050
+assay:logcounts	https://wcm.box.com/shared/static/1krbbfrocqxmncl9f3dxgrc4pgnwyg2r.rds	MR4050
+metadata	https://wcm.box.com/shared/static/z8zpc5i2130boqkv2qy01ajrhm5sx9v4.rds	MR4050
+assay:counts	https://wcm.box.com/shared/static/ay2hz6s3hkc9a6fee6v771iu7msdakok.rds	MR4050
+reducedDims	https://wcm.box.com/shared/static/dxj7j2h9ixoexq2wv97gpn8wupoug1cy.rds	MR4050

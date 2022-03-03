@@ -1,0 +1,225 @@
+---
+title: "3. Identifying DEGs comparing MUT vs WT cells of the same clonotype (MR4050)"
+author: "Friederike Dündar"
+date: "July 2021; updated `r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    code_folding: hide
+    theme: yeti
+    highlight: tango
+vignette: >
+  %\VignetteIndexEntry{3. Identifying DEGs comparing MUT vs WT cells of the same clonotype (MR4050)}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval=TRUE, cache=FALSE
+)
+```
+```{r libraries, message=FALSE, warning=FALSE, cache=FALSE}
+library(data.table)
+library(magrittr)
+library(SingleCellExperiment)  
+library(ggplot2); theme_set(theme_bw(base_size = 16) )
+library(ggrepel)
+library(patchwork)
+##library(KlebanoffMR4050)
+devtools::load_all("/Users/frd2007/Documents/Projects/2018-10_Smita/chris-klebanoff/KlebanoffMR4050")
+```
+
+
+```{r define_winners}
+## based on what we saw in `IdentifyingReactiveClonotype.Rmd`
+winner <- "TRB:CASSADSSNTGELFF;TRA:CAVRDPLSNFGNEKLTF"
+winner_TRB <- "TRB:CASSADSSNTGELFF"
+non_winner <- "TRB:CAWSWGYNTIYF;TRA:CAVGTGANNLFF" # clonotype with negative delta IFNg
+#rare_ct <- "TRA:CVVNFRNSGNTPLVF;TRB:CSARLNIQYF"
+```
+
+```{r eval=FALSE}
+cdrsMR4050 <- list(winner, winner_TRB, non_winner)#, rare_ct)
+usethis::use_data(cdrsMR4050)
+```
+
+
+# Identifying genes that are DE in MUT vs. WT cells of the same clonotype 
+
+The main goal of the bioinformatic analyses is to identify TCR clonotypes that show a selective response against the antigen presented by the APCs.
+These should include T cells that show high values for acute T cell activation, but the same clonotypes should _not_ show significant activation when exposed to the irrelevant antigen. This is how we determined the "winning" clonotype: by simply assessing the difference of IFNG levels.
+
+In principle, we're expecting three groups of T cells:
+
+* __specific responders__: higher activation in the presence of the tumor compared to the irrelevant antigen
+* __unspecific responders__: similarly high activation markers in both antigen conditions;
+* __non-responders__: no expression of activation markers.
+
+
+```{r load_data, cache=FALSE}
+## Load the SCE with the shared clonotypes
+#sce.shared <- readRDS(file = "~/Documents/Projects/2018-10_Smita/data/sce_sharedClonotypes_Mar2020.RDS")
+sce.shared <- load_MR4050shared()
+```
+```{r}
+ifng.dt <- scABC2::make_long_dt(sce.shared,
+  exprs_values = "logcounts", features = "IFNG",
+  include_metaData=c("Sample", "id"))
+setnames(ifng.dt, "feature_name","gene_name")
+```
+
+```{r clonotype_abundance, fig.width=6, fig.show='hold'}
+ifng.dt[, .N, c("Sample","id")] %>%
+ ggplot(., aes(x = N, y = Sample, fill = Sample)) +
+  ggridges::geom_density_ridges2() +
+  ggtitle("Abundance of shared clonotypes") + 
+  xlab("# cells") +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c("lightskyblue1","limegreen"))
+```
+
+The shared clonotypes represent the full spectrum of clonotype frequencies, i.e. the majority is present less than 10 times.
+As we saw in the first vignette, the most abundant clonotypes are not necessarily the most reactive ones in terms of IFNG expression.
+
+## Differentially expressed genes: MUT vs. WT
+
+We're going to **run DE for every clonotype**, comparing MUT vs. WT. 
+`run_DE` is a wrapper function around `scran::findMarkers()`.
+
+```{r finding_markers_WT-vs-MUT, eval=FALSE}
+sce.shared$antigen <-  factor(gsub("\\..*","",sce.shared$Sample), levels = c("WT", "MUT"), ordered = TRUE)
+
+delist.both <- lapply( unique(sce.shared$id), function(x){
+    print(x)
+  run_DE(
+    sce.shared[, sce.shared$id == x],
+    group_identifier = "antigen",
+    direction = "any",
+    FDR = 0.05, rank = Inf,
+    comp_name = paste0(x, "_"))
+})
+names(delist.both) <- unique(sce.shared$id)
+
+## determine those clonotypes for which the DE returned something
+#with_deg <- lapply(delist.both, function(x) !is.null(x[[2]])) %>% unlist
+#delist.both <- delist.both[with_deg] 
+
+## only keep those for which scater::findMarkers was able to run (i.e.,
+## there were at least 2 samples per condition
+no_NA <- sce.shared[, sce.shared$fit_for_test]$id %>% unique
+delist.both <- delist.both[no_NA]
+#usethis::use_data(delist.both[no_NA], overwrite = TRUE) ## moved to Box
+## upload the following file to Box --> KlebanoffLab_singleCellData/
+##!save(delist.both, file = "/Users/frd2007/Documents/Projects/2018-10_Smita/2021-07_ProcessingMR4050/delist.both_MR4050.rda")
+```
+
+```{r load_DEG_results, echo=FALSE}
+library(kableExtra)
+load_DE_results("MR4050")
+
+with_deg <- lapply(delist.both, function(x) !is.null(x[[2]])) %>% unlist
+```
+
+The only clonotypes for which DEG were detected are: `r names(delist.both[with_deg]) %>% paste(., collapse = ", ")`.
+
+This corresponds to the following clonotypes:
+
+```{r results='asis'}
+sce.shared[, sce.shared$id %in% names(delist.both[with_deg])] %>% 
+  colData %>% .[, c("cdr3s_aa", "id")] %>% unique %>% 
+  as.data.frame %>% my_table
+```
+
+## Results 
+
+```{r}
+delist.both[["C24"]]
+```
+
+|Symbol | Name | Comment | 
+|--------|-------|-------|
+| PSMA6 |||
+| NAP1L1||
+|EIF3H |||
+|PIGT|||
+|ECI2|||
+|JOSD1|||
+|GOLGB1|||
+|ARHGAP25|||
+|BTN3A2|||
+
+```{r}
+delist.both[["C160"]] 
+```
+
+|Symbol | Name | Comment | 
+|--------|-------|-------|
+| MAGED2 |||
+| LSM14B |||
+| BCL2L12 |||
+| YIPF2 |||
+|RNF25 |||
+|YPEL3|||
+|SATB1|||
+
+------------------
+
+# Saving tables for Chris
+
+Chris & Smita are generating volcano plots etc. on their own using GraphPad Prism. 
+For this, they need the corresponding information for the differentially expressed genes, which I provide in spreadsheets generated as shown below. 
+They also wanted spreadsheets of clonotypes, of course.
+
+```{r saved_for_chris_01, eval=FALSE}
+## saving logFC values for most frequent clonotypes
+freq_clones <- sce.shared[, sce.shared$freq_across_all > 20]$id %>% unique
+## ...and those for which we've found DE genes
+de_clones <- names(delist.both[with_deg])
+
+## will save them all in one xlsx collection of spreadsheets
+outl <- lapply(unique(c(freq_clones, de_clones)), function(x){
+  degns <- delist.both[[x]]$findMarkers_results$MUT %>% as.data.frame %>%
+    as.data.table(., keep.rownames="gene_symbol")
+  degns[, neglog10.pVal := -1*log10(p.value)]
+  degns[, neglog10.FDR := -1*log10(FDR)]
+  return(data.frame(degns))
+})
+names(outl) <- paste(unique(c(freq_clones, de_clones), "DEG_Mut-vs-Wt", sep = "_"))
+
+## add basic information about the clonotypes
+cinfo <-  clonotype_ids[id %in% unique(c(freq_clones, de_clones))] 
+setnames(cinfo, c("MUT.MR4050", "WT.MR4050"), c("n_cells_in_MUT", "n_cells_in_WT"))
+setorder(cinfo, id)
+outl$clonotype_info <- data.frame(cinfo)
+  
+openxlsx::write.xlsx(outl,
+  file = "/Users/frd2007/Documents/Projects/2018-10_Smita/2021-07_ProcessingMR4050/DEgenes_MR4050.xlsx")
+```
+
+```{r eval=FALSE}
+data("clonotype_ids", package = "KlebanoffMR4050")
+as.data.frame(clonotype_ids) %>% write.table(., quote = F, sep ="\t", row.names =F,
+  file = "/Users/frd2007/Documents/Projects/2018-10_Smita/2021-07_ProcessingMR4050/MR4050_clonotypeIDs.txt")
+```
+
+Expression of lineage markers (CD3, CD4 and CD8) of the winning clonotype, C19:
+
+```{r eval=FALSE}
+gns <- c("CD3E", "CD4","CD8A")
+## iwnner == C19
+sce.shared[gns, sce.shared$cdr3s_aa == winner] %>% logcounts %>% t %>% as.matrix %>% as.data.frame %>%
+  write.table(.,"/Users/frd2007/Documents/Projects/2018-10_Smita/2021-07_ProcessingMR4050/MR4050_C19_Winner_logcounts_CD3-4-8.txt", sep = "\t", quote=FALSE, row.names = TRUE, col.names = TRUE)
+```
+
+
+-------------
+
+```{r}
+sessionInfo()
+```
+
